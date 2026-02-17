@@ -8,7 +8,7 @@ import db from "../config/db.js";
 import redis from "../config/redis.js";
 import bcrypt from "bcrypt";
 import { generateTokenAndSetCookie } from "../utils/generateToken.js";
-import { uploadToR2 } from "../libs/s3.js";
+import { deleteFromR2, uploadToR2, getSignedUrlFromR2 } from "../libs/s3.js";
 
 
 export const registerUser = async (req, res) => {
@@ -175,6 +175,10 @@ export const loginWithPassword = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.img && !user.img.startsWith("http")) {
+      user.img = await getSignedUrlFromR2(user.img);
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -353,14 +357,14 @@ export const onboarding = async (req, res) => {
     }
 
     const file = req.file;
-    const fileUrl = await uploadToR2(
+    const { key, url } = await uploadToR2(
       file.buffer,
       file.originalname,
       file.mimetype
     );
 
     const onboarding = await db("onboarding").insert({
-      img: fileUrl,
+      img: key, // Store the key, not the signed URL
       college_name,
       year_passing,
       linkedin_url,
@@ -404,7 +408,8 @@ export const onboarding = async (req, res) => {
         name: user.name,
         email: user.email,
         isBoarding: user.isBoarding,
-        img: user.img
+        isBoarding: user.isBoarding,
+        img: url // Return the valid signed URL for immediate use
 
       },
     });
@@ -440,6 +445,10 @@ export const getUserProfile = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.img && !user.img.startsWith("http")) {
+      user.img = await getSignedUrlFromR2(user.img);
     }
 
     return res.status(200).json({
@@ -480,17 +489,18 @@ export const editProfile = async (req, res) => {
 
       if (existingOnboarding && existingOnboarding.img) {
         try {
-          await uploadToR2(existingOnboarding.img);
+          await deleteFromR2(existingOnboarding.img);
         } catch (err) {
           console.warn("Failed to delete previous image:", err.message);
         }
       }
 
-      imageUrl = await uploadToR2(
+      const { key } = await uploadToR2(
         req.file.buffer,
         req.file.originalname,
         req.file.mimetype
       );
+      imageUrl = key;
 
 
     }
@@ -532,6 +542,10 @@ export const editProfile = async (req, res) => {
       )
       .where("u.id", userId)
       .first();
+
+    if (updatedUser && updatedUser.img && !updatedUser.img.startsWith("http")) {
+      updatedUser.img = await getSignedUrlFromR2(updatedUser.img);
+    }
 
     return res.status(200).json({
       success: true,
